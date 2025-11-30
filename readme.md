@@ -1,4 +1,4 @@
-# Gesture-Controlled Car Dashboard
+# HyperDash Gesture-Controlled Car Dashboard
 
 A **gesture-based car interface** with smooth, high-end UI for **music, climate, and phone controls**.  
 Implemented with **Python backend** (gesture recognition) and **HTML/CSS/JS frontend** (dashboard UI).
@@ -44,6 +44,3 @@ Implemented with **Python backend** (gesture recognition) and **HTML/CSS/JS fron
 - **Music Playback:** macOS Media API / Spotify API  
 - **Hardware:** MacBook, Webcam / Leap Motion, Car Bluetooth
 
----
-
-## Architecture
