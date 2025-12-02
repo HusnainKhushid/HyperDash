@@ -42,6 +42,8 @@ manager = ConnectionManager()
 # Global Gesture State
 latest_gesture = None
 gesture_lock = threading.Lock()
+# Global Recognizer Instance
+recognizer = GestureRecognizer()
 
 def gesture_loop():
     """
@@ -51,7 +53,7 @@ def gesture_loop():
     global latest_gesture
     
     cap = cv2.VideoCapture(0)
-    recognizer = GestureRecognizer()
+    # recognizer is now global
     
     last_action_time = 0
     current_action = None
@@ -74,7 +76,10 @@ def gesture_loop():
         # Debounce / Cooldown Logic
         if gesture:
             # Only trigger if enough time has passed since ANY last action
-            if current_time - last_action_time > 1.0:
+            # Determine cooldown based on gesture type
+            cooldown = recognizer.PINCH_COOLDOWN if gesture in ["increase_temp", "decrease_temp"] else recognizer.COOLDOWN
+            
+            if current_time - last_action_time > cooldown:
                 print(f"BACKEND DETECTED: {gesture}")
                 
                 with gesture_lock:
@@ -97,21 +102,41 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         last_sent_gesture = None
         while True:
-            # Check for new gesture to send
+            # 1. Check for incoming context updates (non-blocking if possible, but FastAPI WS is async)
+            # We need to poll or use a separate task for reading.
+            # Actually, we can't easily do full duplex in a single while True loop without asyncio.gather or similar.
+            # Simpler approach: The client sends messages. We need to read them.
+            # But we also need to push updates.
+            # Standard pattern: Two tasks. One reader, one writer.
+            
+            # Let's use asyncio.wait_for to poll for messages with a timeout, 
+            # so we can also send updates.
+            
+            try:
+                # Wait for 0.1s for a message
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
+                # Process message
+                message = json.loads(data)
+                if "context" in message:
+                    ctx = message["context"]
+                    print(f"Setting Context: {ctx}")
+                    recognizer.set_context(ctx)
+            except asyncio.TimeoutError:
+                # No message received, continue to send updates
+                pass
+            except Exception as e:
+                print(f"Error reading: {e}")
+                break
+
+            # 2. Send Gesture Updates
             current_gesture = None
             with gesture_lock:
                 if latest_gesture:
                     current_gesture = latest_gesture
-                    # Reset after reading so we don't send it multiple times
-                    # Or we can just send it once and clear it.
-                    # Let's clear it here to ensure it's a one-time event
                     latest_gesture = None 
             
             if current_gesture:
                 await manager.broadcast({"gesture": current_gesture})
-            
-            # Small sleep to prevent tight loop
-            await asyncio.sleep(0.1)
             
     except WebSocketDisconnect:
         manager.disconnect(websocket)

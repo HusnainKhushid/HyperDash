@@ -3,14 +3,18 @@ import './App.css';
 
 // --- Components ---
 
-const NavigationApp = ({ gesture }) => {
+const HomeApp = ({ gesture, setContext, onNavigate }) => {
   const [selectedOption, setSelectedOption] = useState(1);
   const options = [
-    { id: 1, label: "Home" },
-    { id: 2, label: "Work" },
-    { id: 3, label: "Recent" },
-    { id: 4, label: "Search" }
+    { id: 1, label: "Maps", app: 'maps' },
+    { id: 2, label: "Call", app: 'call' },
+    { id: 3, label: "Music", app: 'music' },
+    { id: 4, label: "Climate", app: 'climate' }
   ];
+
+  useEffect(() => {
+    setContext('navigation'); // Keep context as 'navigation' for selection mode
+  }, [setContext]);
 
   useEffect(() => {
     if (gesture === 'one') setSelectedOption(1);
@@ -18,14 +22,15 @@ const NavigationApp = ({ gesture }) => {
     if (gesture === 'three') setSelectedOption(3);
     if (gesture === 'four') setSelectedOption(4);
     if (gesture === 'palm') {
-      console.log(`Navigation: Selected ${options.find(o => o.id === selectedOption).label}`);
-      alert(`Navigating to ${options.find(o => o.id === selectedOption).label}`);
+      const targetApp = options.find(o => o.id === selectedOption).app;
+      console.log(`Home: Opening ${targetApp}`);
+      onNavigate(targetApp);
     }
-  }, [gesture, selectedOption]);
+  }, [gesture, selectedOption, onNavigate]);
 
   return (
-    <div className="app-page navigation">
-      <h1>Navigation</h1>
+    <div className="app-page home">
+      <h1>Home Menu</h1>
       <div className="options-grid">
         {options.map(opt => (
           <div key={opt.id} className={`option-card ${selectedOption === opt.id ? 'selected' : ''}`}>
@@ -35,13 +40,13 @@ const NavigationApp = ({ gesture }) => {
         ))}
       </div>
       <div className="instructions">
-        <p>Use 1, 2, 3, 4 to select. Palm to click.</p>
+        <p>1-4 to Select, Palm to Open</p>
       </div>
     </div>
   );
 };
 
-const MusicApp = ({ gesture }) => {
+const MusicApp = ({ gesture, setContext }) => {
   const [view, setView] = useState('playlist'); // 'playlist' or 'player'
   const [selectedPlaylist, setSelectedPlaylist] = useState(1);
   const [currentSongIndex, setCurrentSongIndex] = useState(0);
@@ -55,6 +60,15 @@ const MusicApp = ({ gesture }) => {
   ];
 
   const songs = ["Song A", "Song B", "Song C", "Song D"];
+
+  useEffect(() => {
+    // Update context whenever view changes
+    if (view === 'playlist') {
+      setContext('music_playlist');
+    } else {
+      setContext('music_player');
+    }
+  }, [view, setContext]);
 
   useEffect(() => {
     if (view === 'playlist') {
@@ -115,7 +129,7 @@ const MusicApp = ({ gesture }) => {
   );
 };
 
-const MapsApp = ({ gesture }) => {
+const MapsApp = ({ gesture, setContext }) => {
   const [selectedLocator, setSelectedLocator] = useState(1);
   const locators = [
     { id: 1, label: "Gas Station" },
@@ -123,6 +137,10 @@ const MapsApp = ({ gesture }) => {
     { id: 3, label: "Hospital" },
     { id: 4, label: "Parking" }
   ];
+
+  useEffect(() => {
+    setContext('maps');
+  }, [setContext]);
 
   useEffect(() => {
     if (gesture === 'one') setSelectedLocator(1);
@@ -150,39 +168,94 @@ const MapsApp = ({ gesture }) => {
   );
 };
 
-const ClimateApp = ({ gesture }) => {
+const ClimateApp = ({ gesture, setContext }) => {
   const [temp, setTemp] = useState(22);
+  const [fanSpeed, setFanSpeed] = useState(2);
+  const [activeControl, setActiveControl] = useState('temp'); // 'temp' or 'fan'
   const [auto, setAuto] = useState(false);
 
   useEffect(() => {
-    if (gesture === 'swipe_left') setTemp(t => Math.max(16, t - 1));
-    if (gesture === 'swipe_right') setTemp(t => Math.min(30, t + 1));
+    setContext('climate');
+  }, [setContext]);
+
+  useEffect(() => {
+    // Selection
+    if (gesture === 'one') setActiveControl('temp');
+    if (gesture === 'two') setActiveControl('fan');
+
+    // Adjustment
+    if (gesture === 'swipe_left') {
+      if (activeControl === 'temp') setTemp(t => Math.max(16, t - 1));
+      if (activeControl === 'fan') setFanSpeed(s => Math.max(1, s - 1));
+    }
+    if (gesture === 'swipe_right') {
+      if (activeControl === 'temp') setTemp(t => Math.min(30, t + 1));
+      if (activeControl === 'fan') setFanSpeed(s => Math.min(5, s + 1));
+    }
+
+    // Toggle
     if (gesture === 'palm') setAuto(a => !a);
-  }, [gesture]);
+
+    // Pinch Gesture (Temperature Only)
+    if (gesture === 'increase_temp') {
+      setTemp(t => Math.min(30, t + 1));
+      setActiveControl('temp'); // Auto-select temp dial
+    }
+    if (gesture === 'decrease_temp') {
+      setTemp(t => Math.max(16, t - 1));
+      setActiveControl('temp');
+    }
+  }, [gesture, activeControl]);
 
   return (
     <div className="app-page climate">
       <h1>Climate Control</h1>
-      <div className="climate-display">
-        <div className="temp-control">
-          <span className="temp-val">{temp}°C</span>
-          <span className="temp-label">Swipe L/R to adjust</span>
+      <div className="climate-dials">
+        {/* Temp Dial */}
+        <div className={`dial ${activeControl === 'temp' ? 'active' : ''}`}>
+          <div className="dial-label">Temperature (1)</div>
+          <div className="dial-value">{temp}°C</div>
+          <div className="dial-ring" style={{ '--percent': `${((temp - 16) / 14) * 100}%` }}></div>
         </div>
-        <div className={`auto-toggle ${auto ? 'active' : ''}`}>
-          <span>AUTO MODE</span>
-          <span className="status">{auto ? 'ON' : 'OFF'}</span>
-          <span className="hint">(Palm to toggle)</span>
+
+        {/* Fan Dial */}
+        <div className={`dial ${activeControl === 'fan' ? 'active' : ''}`}>
+          <div className="dial-label">Fan Speed (2)</div>
+          <div className="dial-value">{fanSpeed}</div>
+          <div className="dial-ring" style={{ '--percent': `${(fanSpeed / 5) * 100}%` }}></div>
         </div>
       </div>
+
+      <div className={`auto-toggle ${auto ? 'active' : ''}`}>
+        <span>AUTO MODE</span>
+        <span className="status">{auto ? 'ON' : 'OFF'}</span>
+        <span className="hint">(Palm)</span>
+      </div>
+
+      <p className="instructions">1/2 to Select Dial, Swipe to Adjust</p>
     </div>
   );
 };
 
-const CallApp = ({ gesture }) => {
+const CallApp = ({ gesture, setContext }) => {
   const [view, setView] = useState('list'); // 'list' or 'incall'
-  const [contacts, setContacts] = useState(["Mom", "Dad", "Boss", "Pizza Place", "Emergency"]);
+  const [contacts, setContacts] = useState([
+    { name: "Mom", number: "555-0101", color: "#FF6B6B" },
+    { name: "Dad", number: "555-0102", color: "#4ECDC4" },
+    { name: "Boss", number: "555-0103", color: "#45B7D1" },
+    { name: "Pizza", number: "555-0104", color: "#FFA07A" },
+    { name: "Emergency", number: "911", color: "#FF0000" }
+  ]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [activeCall, setActiveCall] = useState(null);
+
+  useEffect(() => {
+    if (view === 'list') {
+      setContext('call_list');
+    } else {
+      setContext('call_incall');
+    }
+  }, [view, setContext]);
 
   useEffect(() => {
     if (view === 'list') {
@@ -205,21 +278,27 @@ const CallApp = ({ gesture }) => {
     <div className="app-page call">
       <h1>Phone</h1>
       {view === 'list' ? (
-        <div className="contact-list">
-          <h2>Recents</h2>
-          <div className="list-container">
+        <div className="contact-carousel">
+          <div className="cards-container" style={{ transform: `translateX(-${selectedIndex * 100}%)` }}>
             {contacts.map((c, i) => (
-              <div key={c} className={`contact-item ${i === selectedIndex ? 'selected' : ''}`}>
-                {c}
+              <div key={i} className={`contact-card ${i === selectedIndex ? 'active' : ''}`} style={{ backgroundColor: c.color }}>
+                <div className="avatar">👤</div>
+                <h2>{c.name}</h2>
+                <p>{c.number}</p>
               </div>
             ))}
           </div>
-          <p>Swipe L/R to scroll, 'Call' gesture to dial</p>
+          <div className="carousel-dots">
+            {contacts.map((_, i) => (
+              <span key={i} className={`dot ${i === selectedIndex ? 'active' : ''}`} />
+            ))}
+          </div>
+          <p className="instructions">Swipe to Browse, 'Call' gesture to Dial</p>
         </div>
       ) : (
         <div className="incall-view">
           <div className="avatar">👤</div>
-          <h2>{activeCall}</h2>
+          <h2>{activeCall.name}</h2>
           <p>00:12</p>
           <div className="call-actions">
             <div className="hangup-btn">
@@ -231,7 +310,6 @@ const CallApp = ({ gesture }) => {
     </div>
   );
 };
-
 // --- Main App ---
 
 function App() {
@@ -268,13 +346,33 @@ function App() {
   }, []);
 
   const renderActiveApp = () => {
-    switch (activeApp) {
-      case 'navigation': return <NavigationApp gesture={lastGesture} />;
-      case 'music': return <MusicApp gesture={lastGesture} />;
-      case 'maps': return <MapsApp gesture={lastGesture} />;
-      case 'climate': return <ClimateApp gesture={lastGesture} />;
-      case 'call': return <CallApp gesture={lastGesture} />;
-      default: return <NavigationApp gesture={lastGesture} />;
+    let context = 'navigation';
+
+    // Determine context based on app state
+    // Note: We need to pass this up or determine it here.
+    // Ideally, the sub-components should tell us, or we infer it.
+    // For simplicity, we can infer it if we lift state up, but state is inside components.
+    // Let's modify components to accept a 'setContext' callback or similar?
+    // Or just use a simpler mapping for now.
+
+    // Actually, the components manage their own view state (playlist vs player).
+    // We need to know that state to set the correct context.
+    // Let's lift the 'view' state up to App for Music and Call.
+
+    return (
+      <>
+        {activeApp === 'navigation' && <HomeApp gesture={lastGesture} setContext={(c) => sendContext(c)} onNavigate={setActiveApp} />}
+        {activeApp === 'music' && <MusicApp gesture={lastGesture} setContext={(c) => sendContext(c)} />}
+        {activeApp === 'maps' && <MapsApp gesture={lastGesture} setContext={(c) => sendContext(c)} />}
+        {activeApp === 'climate' && <ClimateApp gesture={lastGesture} setContext={(c) => sendContext(c)} />}
+        {activeApp === 'call' && <CallApp gesture={lastGesture} setContext={(c) => sendContext(c)} />}
+      </>
+    );
+  };
+
+  const sendContext = (context) => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({ context }));
     }
   };
 

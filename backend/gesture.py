@@ -17,7 +17,7 @@ class GestureRecognizer:
         
         # History buffers
         self.position_history = deque(maxlen=20)  # For swipes
-        self.gesture_history = deque(maxlen=35)   # For static gesture stability (needs to be > STABILITY_FRAMES)
+        self.gesture_history = deque(maxlen=30)   # Increased buffer size for longer stability checks
         self.angle_history = deque(maxlen=30)     # For rotation
         
         # State variables
@@ -26,13 +26,34 @@ class GestureRecognizer:
         self.rotation_state = "IDLE" # IDLE, DETECTED_3F, ROTATING_RIGHT, ROTATED_LEFT
         self.rotation_baseline_angle = None
         
+        # Pinch State
+        self.pinch_lifecycle_state = "IDLE" # IDLE, ACTIVE, COOLDOWN
+        self.pinch_active_start_time = 0
+        self.pinch_cooldown_start_time = 0
+        self.last_pinch_dist = None
+        self.pinch_stable_frames = 0
+
+        
         self.swipe_start_pos = None # For Index Finger Swipe
         
         # Constants
         self.SWIPE_THRESHOLD = 0.15 # Normalized coordinate distance
         self.STABILITY_FRAMES = 30  # Number of consistent frames for static gesture (approx 1 sec at 30fps)
+        self.CALL_STABILITY_FRAMES = 40 # Higher stability for call gesture
         self.ROTATION_THRESHOLD = 20 # Degrees
         self.COOLDOWN = 1.0 # Seconds between same gesture triggers
+        self.CALL_COOLDOWN = 3.0 # Longer cooldown for call gesture
+        self.PINCH_COOLDOWN = 0.1 # Faster cooldown for pinch updates
+        
+        self.last_call_time = 0 # Track last call time
+
+        
+        # Context State
+        self.current_context = "navigation" # Default
+        
+    def set_context(self, context):
+        self.current_context = context
+        print(f"GestureRecognizer: Context set to {context}")
 
     def _get_finger_states(self, landmarks):
         """
@@ -114,12 +135,18 @@ class GestureRecognizer:
         if count_others == 2:
             return "two"
             
+        # Pinch Pose: Thumb and Index Open, others closed (L-shape)
+        # fingers[0] is Thumb, fingers[1] is Index
+        if fingers[0] and fingers[1] and not any(fingers[2:]):
+            return "pinch_pose"
+
         if count_others == 1:
             # Usually Index, but could be any.
             # We map this to "one", which will also trigger swipe detection.
             return "one"
             
         return "unknown"
+
 
     def _detect_swipe(self, current_pos, current_time):
         # Deprecated/Unused for Index Swipe logic
@@ -185,47 +212,173 @@ class GestureRecognizer:
                 "raw_gesture": raw_gesture,
                 "yaw": yaw,
                 "pitch": pitch,
-                "facing": is_facing
+                "pitch": pitch,
+                "facing": is_facing,
+                "pinch_state": self.pinch_lifecycle_state
             }
             
             # Refinement: Only accept specific gestures if facing camera
-            if raw_gesture in ["fist", "palm", "one", "two", "three", "four", "call"]:
+            if raw_gesture in ["fist", "palm", "one", "two", "three", "four", "call", "pinch_pose"]:
                 if not is_facing:
+
                     raw_gesture = "unknown" # Treat as unknown if tilted
             
             self.gesture_history.append(raw_gesture)
             
             # Robustness check: Gesture must be consistent for STABILITY_FRAMES
-            if len(self.gesture_history) == self.gesture_history.maxlen:
+            required_frames = self.CALL_STABILITY_FRAMES if raw_gesture == "call" else self.STABILITY_FRAMES
+            
+            if len(self.gesture_history) >= required_frames:
                 # Check if all recent gestures are the same
-                if all(g == raw_gesture for g in list(self.gesture_history)[-self.STABILITY_FRAMES:]):
+                if all(g == raw_gesture for g in list(self.gesture_history)[-required_frames:]):
                     if raw_gesture != "unknown":
                         # Only update if different or enough time passed (handled by caller usually, but we can do it here)
                         # We return it as a candidate, caller handles cooldown/event firing
-                        if raw_gesture in ["fist", "palm", "one", "two", "three", "four", "call"]:
-                            detected_gesture = raw_gesture
-                            self.gesture_history.clear() # Reset buffer to prevent overlap/lag for next gesture
+                        if raw_gesture in ["fist", "palm", "one", "two", "three", "four", "call", "pinch_pose"]:
+
+                            # --- Context Filtering ---
+                            allowed = False
+                            
+                            # Selection Mode (Nav, Playlist, Maps)
+                            if self.current_context in ["navigation", "music_playlist", "maps"]:
+                                if raw_gesture in ["one", "two", "three", "four", "palm"]:
+                                    allowed = True
+                                    
+                            # Control Mode (Player, Climate, Call List, Call InCall)
+                            elif self.current_context in ["music_player", "climate", "call_list", "call_incall"]:
+                                if raw_gesture in ["palm", "fist", "call"]:
+                                    allowed = True
+                                # Note: Swipes are handled separately below, but 'one' triggers swipe.
+                                # We do NOT want 'one' to be returned as a gesture here if we are in control mode.
+                                
+                            if allowed:
+                                # Cooldown check for CALL
+                                if raw_gesture == "call":
+                                     if current_time - self.last_call_time < self.CALL_COOLDOWN:
+                                         # Ignore
+                                         allowed = False
+                                     else:
+                                         self.last_call_time = current_time
+                                
+                                if allowed:
+                                    detected_gesture = raw_gesture
+                                    self.gesture_history.clear() # Reset buffer
+
+            # 1.5 Pinch Detection (Climate Control Only)
+            if self.current_context == "climate":
+                current_time = time.time()
+                
+                # State Machine
+                is_pinch_pose = fingers[0] and fingers[1]
+                
+                if self.pinch_lifecycle_state == "IDLE":
+                    # Check for activation: Stable pinch_pose for 30 frames
+                    PINCH_START_FRAMES = 30
+                    
+                    # We need to track history of is_pinch_pose, but gesture_history tracks raw_gesture.
+                    # We can't easily use gesture_history if we ignore raw_gesture.
+                    # Let's use a separate counter or check current frame + history?
+                    # Or just check if raw_gesture is one of the compatible ones?
+                    # Compatible: pinch_pose, palm, three, two (if thumb+index+middle)
+                    # Actually, let's just use a counter for simplicity since we are in a loop.
+                    # Or better: Update gesture_history to include this "logical" gesture? No.
+                    
+                    # Let's check if the last X frames *would have been* pinch based on fingers?
+                    # We don't have history of fingers, only current.
+                    # But we have gesture_history.
+                    # If we relax the definition, we should probably update _detect_static_raw to return "pinch_any" 
+                    # or just handle it here.
+                    
+                    # Problem: We need 30 frames of consistency.
+                    # If we change logic here, we can't verify history.
+                    # Solution: We will rely on the fact that if Thumb+Index are open, 
+                    # the raw_gesture will be STABLE as *something* (e.g. "palm" or "pinch_pose" or "two").
+                    # So if we see Thumb+Index open NOW, and the raw_gesture history is stable (even if it's "palm"),
+                    # we can count it?
+                    
+                    # Simpler approach: 
+                    # If fingers[0] and fingers[1] are open, increment a counter. If not, reset.
+                    # We need a state variable for this counter.
+                    # Let's add self.pinch_stable_frames = 0 to __init__
+                    
+                    if is_pinch_pose:
+                        self.pinch_stable_frames += 1
+                    else:
+                        self.pinch_stable_frames = 0
+                        
+                    if self.pinch_stable_frames >= PINCH_START_FRAMES:
+                        self.pinch_lifecycle_state = "ACTIVE"
+                        self.pinch_active_start_time = current_time
+                        
+                        # Initialize distance
+                        thumb_tip = landmarks[4]
+                        index_tip = landmarks[8]
+                        self.last_pinch_dist = math.hypot(thumb_tip.x - index_tip.x, thumb_tip.y - index_tip.y)
+                        # print("Pinch ACTIVE")
+                        
+                elif self.pinch_lifecycle_state == "ACTIVE":
+                    # Check if time expired
+                    if current_time - self.pinch_active_start_time > 2.0:
+                        self.pinch_lifecycle_state = "COOLDOWN"
+                        self.pinch_cooldown_start_time = current_time
+                        self.last_pinch_dist = None
+                        # print("Pinch COOLDOWN")
+                    
+                    # Check if pose lost
+                    elif not is_pinch_pose:
+                        self.pinch_lifecycle_state = "IDLE"
+                        self.last_pinch_dist = None
+                        self.pinch_stable_frames = 0
+                        # print("Pinch LOST")
+                        
+                    else:
+                        # Logic for distance change
+                        thumb_tip = landmarks[4]
+                        index_tip = landmarks[8]
+                        dist = math.hypot(thumb_tip.x - index_tip.x, thumb_tip.y - index_tip.y)
+                        
+                        if self.last_pinch_dist is not None:
+                            delta = dist - self.last_pinch_dist
+                            CHANGE_THRESHOLD = 0.02
+                            
+                            if abs(delta) > CHANGE_THRESHOLD:
+                                if delta > 0:
+                                    detected_gesture = "increase_temp"
+                                else:
+                                    detected_gesture = "decrease_temp"
+                                self.last_pinch_dist = dist
+                                
+                elif self.pinch_lifecycle_state == "COOLDOWN":
+                    # Wait for cooldown to expire (e.g. 2 seconds)
+                    if current_time - self.pinch_cooldown_start_time > 2.0:
+                        self.pinch_lifecycle_state = "IDLE"
+                        # print("Pinch READY")
 
             # 2. Swipe Detection (Index Finger Pointing)
             # Track wrist or center (9)
             cx, cy = landmarks[9].x, landmarks[9].y
             
             if raw_gesture == "one":
-                if self.swipe_start_pos is None:
-                    self.swipe_start_pos = (cx, cy)
-                    # print("Swipe: Started tracking")
-                else:
-                    # Check distance
-                    dx = cx - self.swipe_start_pos[0]
-                    SWIPE_DIST_THRESHOLD = 0.2 # 50% of screen width
-                    
-                    if abs(dx) > SWIPE_DIST_THRESHOLD:
-                        if dx > 0:
-                            detected_gesture = "swipe_right"
-                        else:
-                            detected_gesture = "swipe_left"
+                # Only track swipe if we are in a context that supports it
+                # Swipes are for: music_player, climate, call_list
+                if self.current_context in ["music_player", "climate", "call_list"]:
+                    if self.swipe_start_pos is None:
+                        self.swipe_start_pos = (cx, cy)
+                        # print("Swipe: Started tracking")
+                    else:
+                        # Check distance
+                        dx = cx - self.swipe_start_pos[0]
+                        SWIPE_DIST_THRESHOLD = 0.2 # 50% of screen width
                         
-                        self.swipe_start_pos = None # Reset after trigger
+                        if abs(dx) > SWIPE_DIST_THRESHOLD:
+                            if dx > 0:
+                                detected_gesture = "swipe_right"
+                            else:
+                                detected_gesture = "swipe_left"
+                            
+                            self.swipe_start_pos = None # Reset after trigger
+                else:
+                    self.swipe_start_pos = None
             else:
                 self.swipe_start_pos = None # Reset if pose lost
 
